@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The toolbar icons stay on one row even when the case is narrow (numpad hidden or the flick layout): Settings, Recenter, both zoom buttons, Pin, Stay open over apps and the language, instead of the previous two rows of three.
+- Added optional Whisper voice input. A mic key below Paste captures while toggled on and types the transcription when toggled off. Recognition runs entirely on the Frame through an external whisper.cpp command; Full Keyboard bundles no model and uploads nothing. Without an installed transcriber and model the mic key is not shown, no microphone is opened, and audio and transcripts are never logged. A resident whisper-server keeps the model loaded while the keyboard is visible, so each dictation skips the model load and container startup; the one-shot command remains the automatic fallback. Custom layouts opt in with a `whisper` key. See [Whisper voice input](docs/whisper.md).
+
 ## 0.9.2: Swiped words type correctly in X11 apps
 
 - Fixed swiped words and swipe alternatives sometimes arriving scrambled or partly as digits in Brave and other X11 apps, such as `word235` or `htree` for *three*, especially while the Frame was busy. Words of plain ASCII characters are now typed one acknowledged character at a time, the way single key presses already were, with a short gap between characters. This avoids Gamescope's temporary keymap, and keeps the input method from reordering keys. Other text, such as accented words, Japanese or Chinese, is typed as before.

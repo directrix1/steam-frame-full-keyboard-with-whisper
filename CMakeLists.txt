@@ -44,9 +44,9 @@ add_custom_command(OUTPUT "${PROFILE_HEADER}"
             "${CMAKE_CURRENT_SOURCE_DIR}" "${PROFILE_HEADER}"
     DEPENDS ${PROFILE_FILES} tools/embed_defaults.py tools/validate_layout.py
     VERBATIM)
-add_library(keyboard_core src/vr_lifecycle.cpp src/vr_runtime.cpp src/config.cpp src/input.cpp src/output.cpp src/panel.cpp src/settings_ui.cpp src/settings_writer.cpp src/startup.cpp src/app.cpp src/instance.cpp src/placement.cpp src/placement_store.cpp src/grip.cpp src/ei_input.cpp src/japanese.cpp src/cjk.cpp src/swipe.cpp src/text_input.cpp src/native_replacement.cpp src/updates.cpp "${IME_HEADER}" "${IME_CODE}" "${PROFILE_HEADER}")
+add_library(keyboard_core src/vr_lifecycle.cpp src/vr_runtime.cpp src/config.cpp src/input.cpp src/output.cpp src/panel.cpp src/settings_ui.cpp src/settings_writer.cpp src/startup.cpp src/app.cpp src/instance.cpp src/placement.cpp src/placement_store.cpp src/grip.cpp src/ei_input.cpp src/japanese.cpp src/cjk.cpp src/swipe.cpp src/whisper.cpp src/text_input.cpp src/native_replacement.cpp src/updates.cpp "${IME_HEADER}" "${IME_CODE}" "${PROFILE_HEADER}")
 target_include_directories(keyboard_core PUBLIC include PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(keyboard_core PUBLIC PkgConfig::NATIVE framekeyboard_ei PkgConfig::WAYLAND_CLIENT ${CMAKE_DL_LIBS} Threads::Threads)
+target_link_libraries(keyboard_core PUBLIC PkgConfig::NATIVE framekeyboard_ei PkgConfig::WAYLAND_CLIENT ${CMAKE_DL_LIBS} Threads::Threads PRIVATE PkgConfig::SDL)
 target_compile_options(keyboard_core PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
 # Frame already supplies these engines. Minimal host builds can still run the
 # ordinary keyboard; unsupported composition profiles fail explicitly on Apply.
@@ -232,6 +232,12 @@ if(BUILD_TESTING)
     target_link_libraries(swipe-tests PRIVATE keyboard_core)
     target_compile_options(swipe-tests PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME swipe COMMAND swipe-tests --core)
+    # Whisper voice input: WAV writing, transcript cleanup, detection and the
+    # worker against fake commands. Never opens a microphone.
+    add_executable(whisper-tests tests/whisper_tests.cpp)
+    target_link_libraries(whisper-tests PRIVATE keyboard_core)
+    target_compile_options(whisper-tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME whisper COMMAND whisper-tests)
     # Real encoder and bundled English list; skipped when the engine is not built.
     add_test(NAME swipe-model COMMAND swipe-tests --model)
     add_test(NAME swipe-chinese COMMAND swipe-tests --chinese)

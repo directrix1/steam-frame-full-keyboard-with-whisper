@@ -106,6 +106,9 @@ struct PanelView {
     bool settings{};
     bool composing{};
     bool hide_numpad{};
+    // Whisper voice input: hidden without a transcriber, highlighted while
+    // capturing, dimmed while a recording is being transcribed.
+    bool whisper_ready{}, whisper_active{}, whisper_working{};
     std::string preedit;
     std::map<std::string, std::string> key_labels;
     // The flick key being held: what a tap and each flick would type, and the
@@ -126,10 +129,6 @@ bool hidden_key(const PanelView& view, const Key& key);
 // Logical case bounds also define the VR interaction area. Hidden numpad space
 // stays transparent in the fixed-size texture, preserving the dashboard anchor.
 Rect panel_case_bounds(const PanelView& view);
-// A case narrower than the panel (numpad hidden, flick layout) cannot fit the
-// main toolbar and swipe suggestions in one row; the zoom and passthrough
-// buttons then form a second row under Settings.
-bool compact_toolbar(const PanelView& view);
 // This is the complete hit region, including transparent padding around the line.
 std::optional<Rect> panel_move_handle_bounds(const PanelView& view);
 // Panel area of the flick preview, which may extend past the case.

@@ -202,6 +202,8 @@ Layout parse_layout(const std::string& json) {
             key.icon = Icon::SteamOS;
         } else if (icon == "backspace") {
             key.icon = Icon::Backspace;
+        } else if (icon == "mic") {
+            key.icon = Icon::Mic;
         } else if (!icon.empty()) {
             throw std::runtime_error("unknown key icon");
         }
@@ -215,6 +217,8 @@ Layout parse_layout(const std::string& json) {
             key.action_kind = ActionKind::Key;
         } else if (kind == "shortcut" && (key.action == "copy" || key.action == "paste")) {
             key.action_kind = ActionKind::Shortcut;
+        } else if (kind == "whisper" && key.action == "toggle") {
+            key.action_kind = ActionKind::Whisper;
         } else if (kind == "flick" && !key.action.empty() && key.action.size() <= 32) {
             key.action_kind = ActionKind::Flick;
         } else {

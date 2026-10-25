@@ -9,6 +9,7 @@
 #include "settings_ui.hpp"
 #include "settings_writer.hpp"
 #include "swipe.hpp"
+#include "whisper.hpp"
 #include <atomic>
 #include <csignal>
 #include <optional>
@@ -58,6 +59,9 @@ class App {
     void cancel(bool discard_composition = true);
     bool tick(double now);
     void paint(double now);
+    // VR forwards the panel's visibility; Whisper keeps its loaded model only
+    // while the keyboard is shown, then for a short grace after it hides.
+    void whisper_visibility(bool visible);
     void show_settings();
     void back();
     bool scroll(unsigned pointer, double dx, double dy);
@@ -142,6 +146,11 @@ class App {
     bool unicode_mode() const;
     bool external_jis() const;
     bool text_key(const Key& key, const std::set<int>& mods) const;
+    // Whisper voice input. Capture runs on SDL's audio thread and the CLI on
+    // WhisperInput's worker; App alone types results, through the output queue.
+    void prepare_whisper();
+    void toggle_whisper();
+    void deliver_whisper();
     // Swipe typing. Decoding runs on SwipeService's worker; App alone sends text.
     bool swipe_supported(const std::string& language) const;
     bool swipe_enabled() const { return swipe_ && swipe_keyboard_; }
@@ -204,6 +213,8 @@ class App {
     bool dismiss_requested_{};
     SettingsUi settings_ui_;
     std::unique_ptr<LanguageMap> keymap_;
+    // Null until a transcriber and model are installed; then the mic key shows.
+    std::unique_ptr<WhisperInput> whisper_;
     // The launch declaration is frozen; Reload cannot redefine the target.
     std::optional<Language> target_language_;
     OutputController output_;

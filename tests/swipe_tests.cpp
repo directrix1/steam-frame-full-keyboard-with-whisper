@@ -668,13 +668,11 @@ void suggestions_clear_the_toolbar() {
                             "suggestions sit between the toolbar and Close, readable");
                 }
             }
-            // With the numpad hidden, zoom and passthrough move to a second row.
+            // The toolbar stays on one row even with the numpad hidden.
             const auto smaller = control(view, "size-smaller").bounds;
             const auto passthrough = control(view, "passthrough").bounds;
-            require((smaller.y > 12 && passthrough.y == smaller.y) == hide_numpad,
-                    "a compact toolbar stacks zoom and passthrough under Settings");
-            require(!hide_numpad || smaller.x == control(view, "settings").bounds.x,
-                    "the second row starts under Settings");
+            require(smaller.y == 12 && passthrough.y == 12,
+                    "the toolbar keeps one row when the case narrows");
         }
     }
 }

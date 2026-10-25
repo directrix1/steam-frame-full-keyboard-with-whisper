@@ -34,6 +34,20 @@
       "icon": "paste"
     },
     {
+      "id": "Whisper",
+      "label": "Whisper",
+      "secondary_label": "",
+      "x": 0,
+      "y": 318,
+      "width": 79,
+      "height": 98,
+      "action": {
+        "kind": "whisper",
+        "value": "toggle"
+      },
+      "icon": "mic"
+    },
+    {
       "id": "Escape",
       "label": "Esc",
       "secondary_label": "",

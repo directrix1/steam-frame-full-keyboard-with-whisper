@@ -31,12 +31,14 @@ enum class Icon {
     SteamFrame,
     SteamOS,
     Backspace,
+    Mic,
     PassthroughOn,
     PassthroughOff
 };
 
 // Flick keys name a slot of the language's flick map; they never send physical keys.
-enum class ActionKind { Key, Shortcut, Flick };
+// The whisper key toggles voice input capture; it never sends keys either.
+enum class ActionKind { Key, Shortcut, Flick, Whisper };
 struct Key {
     bool operator==(const Key&) const = default;
     std::string id, label, secondary_label;

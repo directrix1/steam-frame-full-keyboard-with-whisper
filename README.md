@@ -15,6 +15,7 @@ A full-size alternative to Steam Frame's built-in virtual keyboard, made for eve
 - Native Enter and numpad Enter keys. The focused app decides whether Enter submits or inserts a newline.
 - Controller laser typing, press/release haptic clicks, and subtle hover feedback.
 - Experimental swipe typing, off by default, for English, German, French, Spanish, Italian, Brazilian Portuguese, Ukrainian, Russian and Chinese Pinyin. Swipe typing is powered by "FUTO Swipe" technology.
+- Optional **Whisper voice input**: press the mic key, speak, press again, and the transcription is typed on the Frame. Off unless you install the transcriber; see [Whisper voice input](docs/whisper.md).
 - Move with the laser handle below the keyboard, or enable grab movement in Settings. Size controls are available in both modes.
 - Dashboard following, saved placement, and relaunch-to-recenter recovery.
 - Editable layouts, languages, and themes, with a settings menu inside VR.
@@ -80,6 +81,7 @@ For a manual update, quit Full Keyboard first. With native replacement enabled, 
 | Hide the numpad | In Settings, check General → Hide numpad and Apply and save |
 | Change layout, language, or theme | Open the gear icon, choose profiles, then **Apply and save** |
 | Recenter | Use the recenter icon, or launch Full Keyboard again |
+| Dictate with Whisper | Install the transcriber first (see below), then press the mic key below Paste, speak, and press it again to type the result |
 | Close | Use × to hide the panel in replacement mode; otherwise it exits the app |
 | Quit replacement mode | Open Settings → Quit Full Keyboard |
 
@@ -110,11 +112,24 @@ Copy a bundled JSON profile from `~/.local/share/framekeyboard/current/share/fra
 
 Use a new profile `id` to add a choice, or the same `id` to override a bundled one. [Configuration reference](docs/configuration.md) covers fields, favorites, validation, and saved placement.
 
+## Whisper voice input (optional)
+
+The keyboard can turn speech into text entirely on the Frame. The mic key appears below Paste once a transcriber and a model are installed; without them the key is hidden and nothing is captured. Two copy-paste commands enable it — user-local [GNU Guix](https://guix.gnu.org/) provides whisper.cpp, and the model is a one-time download. No `sudo` and no system changes:
+
+```sh
+guix-pkg install whisper-cpp
+mkdir -p ~/.local/share/framekeyboard/models
+curl -L --create-dirs -o ~/.local/share/framekeyboard/models/ggml-tiny.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+```
+
+Open Full Keyboard (or press **Reload config** in Settings) and the mic key appears. Press it, speak, press it again; the transcription is typed into the focused field a few seconds later. `ggml-base.bin` and `ggml-small.bin` are more accurate replacements in the same directory. [Whisper voice input](docs/whisper.md) covers usage, environment overrides, privacy, and limitations.
+
 ## How it works
 
 The keyboard is a native C++20 app. Cairo/Pango draw the keys, Vulkan/OpenVR display the panel, and libei sends native controls to the Frame's local Gamescope compositor. A feature-checked Gamescope text-input protocol sends characters resolved from the selected layout, including Japanese, Chinese and Korean composition. It does not run a browser or need an internet connection.
 
-Copy and Paste send shortcuts; the app does not read clipboard contents. It does not log typed text or save composition history. Placement and profile preferences are stored locally.
+Copy and Paste send shortcuts; the app does not read clipboard contents. It does not log typed text or save composition history. Placement and profile preferences are stored locally. With Whisper voice input, the microphone is open only between the two presses of the mic key, recognition runs entirely on the Frame, and neither audio nor transcripts are logged; the temporary clip is private and deleted immediately.
 
 The visible panel polls input and follows the dashboard at a target 60 Hz. While hidden, polling drops to 4 Hz. It redraws the texture only when its display changes or a key animation runs. With replacement enabled, closing the panel keeps the app resident for the next native request; Settings → Quit Full Keyboard exits it. With replacement off, closing the keyboard exits the process. Battery impact has not been benchmarked.
 

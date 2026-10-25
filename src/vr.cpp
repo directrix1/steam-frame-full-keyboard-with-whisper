@@ -1470,6 +1470,8 @@ int run_vr(App& app, VrInstance& instance, NativeReplacement& replacement, doubl
         if (!presentable()) {
             hide_panel();
         }
+        // The warm Whisper model lives only while the keyboard is shown.
+        app.whisper_visibility(lifecycle.visible());
         const bool repaint = app.tick(now);
         if (lifecycle.visible() && repaint) {
             app.paint(now);

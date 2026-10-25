@@ -190,6 +190,7 @@ App::App(const Options& options, KeySink& sink, SettingsWriter::Write write_pref
     pending_start_with_steamos_ = settings_.start_with_steamos;
     pending_swipe_typing_ = settings_.swipe_typing;
     prepare_swipe();
+    prepare_whisper();
     update_settings_ui();
     status_ = !startup_status_.empty()   ? startup_status_
               : profiles_.errors.empty() ? ""
@@ -246,33 +247,23 @@ std::vector<Control> App::controls() const {
         append_move_handle();
         return result;
     }
-    // One row: Settings, Recenter, zoom, Pin, passthrough, language. Compact:
-    // Settings, Recenter, Pin, language, with zoom and passthrough below.
-    const bool compact = compact_toolbar(geometry);
+    // One row, always: Settings, Recenter, zoom, Pin, passthrough, language.
     const double x = body.x + 18;
-    auto slot = [&](int row_one, int compact_column, int compact_row) {
-        return compact ? std::pair{x + compact_column * 70.0, 12.0 + compact_row * 50}
-                       : std::pair{x + row_one * 70.0, 12.0};
-    };
-    auto button = [&](int row_one, int compact_column, int compact_row, double width = 60) {
-        const auto [left, top] = slot(row_one, compact_column, compact_row);
-        return Rect{left, top, width, 42};
-    };
-    add({ControlKind::Settings}, {"settings", "Settings", button(0, 0, 0), false, Icon::Settings});
-    add({ControlKind::Recenter}, {"recenter", "Recenter", button(1, 1, 0), false, Icon::Recenter});
+    auto button = [&](int column, double width = 60) { return Rect{x + column * 70.0, 12.0, width, 42}; };
+    add({ControlKind::Settings}, {"settings", "Settings", button(0), false, Icon::Settings});
+    add({ControlKind::Recenter}, {"recenter", "Recenter", button(1), false, Icon::Recenter});
     add({ControlKind::Smaller},
-        {"size-smaller", "Smaller keyboard", button(2, 0, 1), false, Icon::ScaleDown});
-    add({ControlKind::Larger},
-        {"size-larger", "Larger keyboard", button(3, 1, 1), false, Icon::ScaleUp});
+        {"size-smaller", "Smaller keyboard", button(2), false, Icon::ScaleDown});
+    add({ControlKind::Larger}, {"size-larger", "Larger keyboard", button(3), false, Icon::ScaleUp});
     add({ControlKind::Pin}, {"pin", settings_.pinned ? "Unpin keyboard" : "Pin keyboard",
-                             button(4, 2, 0), false, settings_.pinned ? Icon::PinOn : Icon::PinOff});
+                             button(4), false, settings_.pinned ? Icon::PinOn : Icon::PinOff});
     add({ControlKind::Passthrough},
         {"passthrough", passthrough_ ? "Close with the dashboard" : "Stay open over apps",
-         button(5, 2, 1), passthrough_, passthrough_ ? Icon::PassthroughOn : Icon::PassthroughOff});
+         button(5), passthrough_, passthrough_ ? Icon::PassthroughOn : Icon::PassthroughOff});
     if (!settings_.favorites.empty()) {
         add({ControlKind::LanguageCycle},
             {"language-cycle", language_short_name(profiles_.languages.at(settings_.active.language)),
-             button(6, 3, 0, 100)});
+             button(6, 100)});
     }
     // Where the first row's fixed buttons end; suggestions start after it.
     double toolbar_end = x;
@@ -435,6 +426,7 @@ PanelView App::geometry() const {
     v.theme = &profiles_.themes.at(settings_.active.theme);
     v.language = &profiles_.languages.at(settings_.active.language);
     v.hide_numpad = settings_.hide_numpad;
+    v.whisper_ready = whisper_ != nullptr;
     v.settings = settings_open_;
     v.composing = (japanese() && !japanese_latin_) || (cjk_ && !cjk_latin_);
     return v;
@@ -447,6 +439,9 @@ PanelView App::view() const {
     v.keymap = keymap_.get();
     v.keyboard = &keyboard_;
     v.hide_numpad = settings_.hide_numpad;
+    v.whisper_ready = whisper_ != nullptr;
+    v.whisper_active = whisper_ && whisper_->capturing();
+    v.whisper_working = whisper_ && whisper_->working();
     v.controls = controls();
     if (settings_open_) {
         settings_ui_.append(v);
@@ -685,7 +680,8 @@ bool App::down(unsigned pointer, double x, double y, double now) {
         const bool cancel_accent = unicode_mode() && keymap_->composing() &&
                                    (key->action == "Escape" || key->action == "Backspace");
         const bool retry_text = output_.retry_available() && key->action == "Enter";
-        const bool local = ime_local || text_local || cancel_accent || retry_text;
+        const bool whisper_key = key->action_kind == ActionKind::Whisper;
+        const bool local = ime_local || text_local || cancel_accent || retry_text || whisper_key;
         if (!backend_ready_ || keyboard_.pointer_pressed(pointer)) {
             return false;
         }
@@ -762,6 +758,9 @@ bool App::down(unsigned pointer, double x, double y, double now) {
                     if (keymap_->composing()) {
                         status_ = "Accent pending";
                     }
+                } else if (whisper_key) {
+                    // Local: capture or transcribe, never a key to the target.
+                    toggle_whisper();
                 } else if (!local) {
                     keymap_->cancel_compose();
                     status_.clear();
@@ -854,6 +853,12 @@ void App::cancel(bool discard_composition) {
             cjk_->cancel();
         }
     }
+    // The microphone is never left capturing while the keyboard is hidden or
+    // the user cancels; a transcription already running may still deliver.
+    if (whisper_ && whisper_->capturing()) {
+        whisper_->abort();
+        status_.clear();
+    }
     keyboard_.cancel_all();
     pressed_controls_.clear();
     hovered_.clear();
@@ -884,6 +889,7 @@ bool App::tick(double now) {
     }
     refresh_typing();
     finish_swipe(false);
+    deliver_whisper();
     dirty |= output_.tick(now);
     forget_failed_swipe();
     update_output_status();
@@ -1112,6 +1118,7 @@ void App::reload() {
     pending_swipe_typing_ = settings_.swipe_typing;
     swipe_prepared_.clear(); // Reread an edited word list.
     prepare_swipe();
+    prepare_whisper(); // A newly installed transcriber or model appears here.
     rebuild_cycle_entries();
     update_settings_ui();
     settings_ui_.reset();
@@ -1338,6 +1345,67 @@ bool App::retry_output() {
     const bool accepted = output_.retry();
     update_output_status();
     return accepted;
+}
+void App::prepare_whisper() {
+    if (whisper_) {
+        whisper_->abort(); // Stop the microphone before the object goes away.
+        whisper_.reset();
+    }
+    if (auto backend = detect_whisper_backend()) {
+        whisper_ = std::make_unique<WhisperInput>(*backend);
+    }
+}
+void App::whisper_visibility(bool visible) {
+    if (whisper_) {
+        whisper_->set_visible(visible);
+    }
+}
+void App::toggle_whisper() {
+    if (!whisper_) {
+        status_ = "Whisper input is unavailable.";
+        dirty = true;
+        return;
+    }
+    if (whisper_->capturing()) {
+        whisper_->stop_and_transcribe();
+        status_ =
+            whisper_->working() ? "Transcribing. Keep the keyboard open." : "No speech was captured.";
+    } else if (whisper_->working()) {
+        status_ = "Still transcribing the previous recording.";
+    } else {
+        std::string error;
+        if (whisper_->start(error)) {
+            status_ = "Listening. Press the mic key again to transcribe and type.";
+        } else {
+            status_ = error;
+        }
+    }
+    dirty = true;
+}
+void App::deliver_whisper() {
+    if (!whisper_) {
+        return;
+    }
+    if (whisper_->capturing() && whisper_->full()) {
+        whisper_->stop_and_transcribe();
+        status_ = "Recording limit reached. Transcribing.";
+        dirty = true;
+    }
+    const auto result = whisper_->take_result();
+    if (!result) {
+        return;
+    }
+    if (!result->error.empty()) {
+        status_ = result->error;
+    } else if (options_.input == InputBackend::None) {
+        // A preview or check launch cannot type; never show the transcription.
+        status_ = "Preview launch: the transcription was discarded.";
+    } else if (output_.commit_text(result->text)) {
+        status_.clear();
+    } else {
+        status_ = "Text was not sent. Release other keys and check the target/input connection.";
+    }
+    dirty = true;
 }
 int App::native_code(const Key& key, const std::set<int>& mods) {
     if (!unicode_mode()) {

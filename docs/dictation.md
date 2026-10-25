@@ -1,6 +1,6 @@
 # Dictation plan
 
-Status: designed, not started, and not part of the 0.9.0 release. The main path sends speech to a speech server the user hosts; a limited on-device mode covers English and Spanish. The measurements behind this are in [measurements](#measurements-2026-10-24). Items marked *proposal* are Claude's suggestions that the owner has not confirmed yet. Mark milestone checkboxes only after their acceptance conditions pass.
+Status: design only; not started. A simpler voice input has since shipped: a mic key that captures while toggled on and types the on-device Whisper transcription when toggled off, with no editor, no server and no Settings card. See [Whisper voice input](whisper.md); for what is currently shipped it supersedes this plan, which remains a design document. The main path here sends speech to a speech server the user hosts; a limited on-device mode covers English and Spanish. The measurements behind this are in [measurements](#measurements-2026-10-24). Items marked *proposal* are Claude's suggestions that the owner has not confirmed yet. Mark milestone checkboxes only after their acceptance conditions pass.
 
 Dictation turns speech into text. The user speaks into a local editor on the keyboard, corrects the text there, and sends it to the focused application in one go. The Frame records audio, splits it into phrases, edits text and types it. Each phrase is turned into text either by a speech server elsewhere on the network, or by a small model on the Frame.
 
