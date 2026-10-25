@@ -21,6 +21,7 @@
 #include <netinet/in.h>
 #include <signal.h>
 #include <sstream>
+#include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -875,6 +876,9 @@ void WhisperInput::manage_server() {
         return;
     }
     if (pid == 0) {
+        // An app that dies outside its own cleanup (SIGTERM, crash) must not
+        // leave a resident server behind holding a loaded model.
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
         const int devnull = open("/dev/null", O_WRONLY);
         if (devnull >= 0) {
             dup2(devnull, STDOUT_FILENO);

@@ -21,6 +21,7 @@ Then open Full Keyboard (or press **Reload config** in Settings if it was alread
 
 - **Models.** Any `ggml-*.bin` Whisper model in `~/.local/share/framekeyboard/models/` works; the app picks the best installed name, preferring `small`, then `base`, then `tiny`. `ggml-tiny.bin` (77 MB) is the smallest starting point; `ggml-base.bin` (145 MB) and `ggml-small.bin` (494 MB) are more accurate and slower. Models are downloaded from the whisper.cpp model repository, never by the app.
 - **Guix details.** Rootless Guix runs its programs inside a container, so the installed `whisper-cli` is not directly executable from the gaming session. Detection finds the store copy and invokes it through the profile wrapper (`~/.local/bin/guix-env whisper-cli`), which resolves the profile's own version inside the container. A plain `whisper-cli` on `PATH` or at `~/.guix-profile/bin/whisper-cli` is preferred when present.
+- **GPU acceleration.** The keyboard runs whatever command it finds; if that whisper.cpp build has a GPU backend it uses it by itself. A locally built whisper.cpp with the Vulkan backend (`-DGGML_VULKAN=ON`) offloads inference to the Frame's Adreno GPU through Turnip and cuts a short dictation from tens of seconds to a few. Place such a build earlier on `PATH` than the Guix copy to select it. Inside the gaming session, implicit Vulkan layers (the Steam overlay stack) can break ggml's Vulkan backend; setting `VK_LOADER_LAYERS_DISABLE=~implicit~` in the command's environment avoids that.
 
 ## Use it
 
@@ -38,7 +39,7 @@ Then open Full Keyboard (or press **Reload config** in Settings if it was alread
 
 ## Warm server
 
-While the keyboard is shown, Full Keyboard keeps a `whisper-server` running beside it so the model stays loaded and clips skip the per-run process and container startup: on the Frame, a short phrase takes roughly 5 s with `ggml-base`, 15–30 s with `ggml-small` and about 2 s with `ggml-tiny` — the model load itself is absorbed by the server, never by your press. The server is started when the keyboard first appears, kept across clips, and stopped shortly after the keyboard hides — nothing Whisper-related stays running while the keyboard is closed.
+While the keyboard is shown, Full Keyboard keeps a `whisper-server` running beside it so the model stays loaded and clips skip the per-run process and container startup: on the Frame's CPU a short phrase takes roughly 5 s with `ggml-base`, 15–30 s with `ggml-small` and about 2 s with `ggml-tiny`; a Vulkan-enabled build (see [Guix details](#enable-it)) runs the same clips in a few seconds on the GPU — the model load itself is absorbed by the server, never by your press. The server is started when the keyboard first appears, kept across clips, and stopped shortly after the keyboard hides — nothing Whisper-related stays running while the keyboard is closed, and the server also stops by itself if the keyboard process dies unexpectedly.
 
 - **First press.** When the keyboard has just opened, the server is still loading its model; the first transcription waits for that load, later ones do not.
 - **Same machine only.** The server listens on a random loopback port on `127.0.0.1`; clips are POSTed in memory (never written to disk on this path), nothing leaves the Frame, and nothing is logged.
