@@ -5,6 +5,7 @@
 #include "framekeyboard/updates.hpp"
 #include "framekeyboard/vr_runtime.hpp"
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -155,6 +156,13 @@ int main(int argc, char** argv) {
         {
             std::unique_ptr<fk::VrInstance> instance;
             if (options.mode == fk::Mode::Vr) {
+                // The gaming session's implicit Vulkan layers (the Steam
+                // overlay stack) tracked the panel's device through a
+                // co-process GPU fault and aborted the process while the
+                // panel recreated it. The panel's private device wants them
+                // gone, exactly as the Whisper children do; explicit layers
+                // stay available.
+                setenv("VK_LOADER_LAYERS_DISABLE", "~implicit~", 0);
                 instance =
                     std::make_unique<fk::VrInstance>(fk::VrInstance::runtime_directory(), !start_hidden);
                 if (!instance->is_owner()) {
