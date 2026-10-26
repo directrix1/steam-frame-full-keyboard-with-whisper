@@ -19,9 +19,10 @@ namespace framekeyboard {
 // environment overrides may name a wrapper that takes whisper-cli's arguments.
 struct WhisperBackend {
     std::vector<std::string> command; // Executable, then fixed leading arguments.
-    // whisper-server with the same model: loaded once per keyboard appearance
-    // so each clip is one localhost request instead of one model load. Empty
-    // when no server binary was found; every clip then runs the one-shot CLI.
+    // whisper-server with the same model, opt-in via FRAMEKEYBOARD_WHISPER_SERVER:
+    // loaded once per keyboard appearance so each clip is one localhost
+    // request instead of one model load. Empty by default; every clip then
+    // runs the one-shot CLI, whose GPU memory is freed when it exits.
     std::vector<std::string> server_command;
     std::filesystem::path model;
     std::string language{"auto"};

@@ -145,12 +145,21 @@ void test_detection(const fs::path& home) {
     setenv("XDG_DATA_HOME", (home / "data").c_str(), 1);
     unsetenv("FRAMEKEYBOARD_WHISPER_CLI");
     unsetenv("FRAMEKEYBOARD_WHISPER_MODEL");
+    unsetenv("FRAMEKEYBOARD_WHISPER_SERVER");
     auto backend = detect_whisper_backend(app_dir);
     require(backend.has_value(), "bundled helpers plus a model are detected");
     require(backend->command.front() == (app_dir / "whisper-cli").string(), "bundled command");
-    require(backend->server_command.front() == (app_dir / "whisper-server").string(), "bundled server");
+    require(backend->server_command.empty(),
+            "the default runs the one-shot CLI; no resident GPU context next to VR");
     require(backend->model.filename() == "ggml-base.bin", "small before base before tiny");
     require(backend->language == "auto" && backend->threads == 4, "defaults");
+
+    // Opt-in warm server: the variable names the command.
+    setenv("FRAMEKEYBOARD_WHISPER_SERVER", (app_dir / "whisper-server").string().c_str(), 1);
+    backend = detect_whisper_backend(app_dir);
+    require(backend->server_command.front() == (app_dir / "whisper-server").string(),
+            "an explicit server command is used");
+    unsetenv("FRAMEKEYBOARD_WHISPER_SERVER");
 
     setenv("FRAMEKEYBOARD_WHISPER_SERVER", "", 1);
     backend = detect_whisper_backend(app_dir);

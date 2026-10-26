@@ -124,27 +124,25 @@ std::vector<std::string> detect_command(const fs::path& app_dir) {
 }
 
 // whisper-server keeps one model loaded for many clips, so dictation stops
-// paying the model load per press. FRAMEKEYBOARD_WHISPER_SERVER overrides the
-// bundled binary; an explicitly set empty value disables the server and keeps
-// the per-clip CLI.
+// paying the model load per press. It is opt-in: a resident helper holds a
+// Vulkan context and its GPU buffers for the whole keyboard appearance, and
+// while a VR session was rendering, a resident server's request faulted the
+// Frame's GPU out from under the keyboard (VK_ERROR_DEVICE_LOST, session
+// restart; observed 2026-10-26). The one-shot CLI loads the model per clip
+// for about a second on the GPU and frees everything when it exits, so it is
+// the default. FRAMEKEYBOARD_WHISPER_SERVER names the warm-server command;
+// the bundled binary is used only when this variable explicitly asks.
 std::vector<std::string> detect_server_command(const std::vector<std::string>& cli,
                                                const fs::path& app_dir) {
     if (const char* server = std::getenv("FRAMEKEYBOARD_WHISPER_SERVER")) {
         if (!*server) {
-            return {};
+            return {}; // Explicitly set empty: CLI per clip, no server.
         }
         return tokenize_command(server);
     }
-    if (auto bundled = app_dir / "whisper-server"; executable(bundled)) {
-        return {bundled.string()};
-    }
-    if (cli.size() == 1) {
-        // An override may name a directory that also holds the server.
-        if (auto candidate = fs::path(cli.front()).parent_path() / "whisper-server";
-            executable(candidate)) {
-            return {candidate.string()};
-        }
-    }
+    // Unset: no warm server. (The variable's name is the opt-in.)
+    (void)cli;
+    (void)app_dir;
     return {};
 }
 
@@ -679,7 +677,7 @@ WhisperInput::Result WhisperInput::transcribe(std::vector<std::int16_t> samples)
         std::fclose(file);
     }
     std::vector<std::string> argv = backend_.command;
-    const std::array<std::pair<const char*, std::string>, 8> options = {
+    const std::array<std::pair<const char*, std::string>, 7> options = {
         std::pair{"-m", backend_.model.string()},
         std::pair{"-f", wav.string()},
         std::pair{"-l", backend_.language},
@@ -687,7 +685,6 @@ WhisperInput::Result WhisperInput::transcribe(std::vector<std::int16_t> samples)
         std::pair{"-of", base},
         std::pair{"-otxt", ""},
         std::pair{"-np", ""},
-        std::pair{"-ng", ""},
     };
     for (const auto& [flag, value] : options) {
         argv.push_back(flag);

@@ -20,7 +20,7 @@ Then open Full Keyboard (or press **Reload config** in Settings if it was alread
 
 - **Models.** Any `ggml-*.bin` Whisper model in `~/.local/share/framekeyboard/models/` works; the app picks the best installed name, preferring `small`, then `base`, then `tiny`. `ggml-tiny.bin` (77 MB) is the smallest starting point; `ggml-base.bin` (145 MB) and `ggml-small.bin` (494 MB) are more accurate and slower. Models are downloaded from the whisper.cpp model repository, never by the app.
 - **Bundled whisper.cpp.** The keyboard always runs the whisper helpers installed next to its own binary — never a system or `PATH` copy. `third_party/whisper.cpp` records the pinned upstream revision, license and local pruning.
-- **GPU acceleration.** When the package was built on a host with a Vulkan toolchain (`glslc` and Vulkan headers, `-DGGML_VULKAN=ON`), inference is offloaded to the Frame's Adreno GPU through Turnip and a short dictation takes seconds instead of tens of seconds; otherwise the same binary runs on the CPU. The app sets `VK_LOADER_LAYERS_DISABLE=~implicit~` for the helpers so the gaming session's implicit Vulkan layers (the Steam overlay stack) cannot break ggml's Vulkan backend.
+- **GPU acceleration.** When the package was built on a host with a Vulkan toolchain (`glslc` and Vulkan headers, `-DGGML_VULKAN=ON`), inference is offloaded to the Frame's Adreno GPU through Turnip and a short dictation takes seconds instead of tens of seconds; otherwise the same binary runs on the CPU — roughly 5 s per short phrase with `ggml-base`, 15–30 s with `ggml-small` and about 2 s with `ggml-tiny`. The app sets `VK_LOADER_LAYERS_DISABLE=~implicit~` for the helpers so the gaming session's implicit Vulkan layers (the Steam overlay stack) cannot break ggml's Vulkan backend.
 
 ## Use it
 
@@ -36,14 +36,16 @@ Then open Full Keyboard (or press **Reload config** in Settings if it was alread
 - Hiding or closing the keyboard while capturing discards the recording; nothing is typed into a target that is no longer visible.
 - Clips shorter than 0.3 s report *The recording was too short.* Silence and non-speech report *No speech was detected.*
 
-## Warm server
+## Warm server (opt-in)
 
-While the keyboard is shown, Full Keyboard keeps a `whisper-server` running beside it so the model stays loaded and clips skip the per-run process and model load: on the Frame's CPU a short phrase takes roughly 5 s with `ggml-base`, 15–30 s with `ggml-small` and about 2 s with `ggml-tiny`; a Vulkan-enabled build (see [GPU acceleration](#enable-it)) runs the same clips in a few seconds on the GPU — the model load itself is absorbed by the server, never by your press. The server is started when the keyboard first appears, kept across clips, and stopped shortly after the keyboard hides — nothing Whisper-related stays running while the keyboard is closed, and the server also stops by itself if the keyboard process dies unexpectedly.
+By default every clip runs the one-shot `whisper-cli` beside the keyboard binary: it loads the model, transcribes, and exits, freeing its memory — including its GPU memory — after each dictation. A resident `whisper-server` can skip the model load between clips (about a second on the GPU), but it holds a Vulkan context and its GPU buffers for as long as the keyboard is up, and on the Frame a resident server's request has been observed to fault the GPU while the VR session was rendering (the keyboard's own Vulkan device went `VK_ERROR_DEVICE_LOST` and the VR session restarted). The server is therefore opt-in:
 
-- **First press.** When the keyboard has just opened, the server is still loading its model; the first transcription waits for that load, later ones do not.
-- **Same machine only.** The server listens on a random loopback port on `127.0.0.1`; clips are POSTed in memory (never written to disk on this path), nothing leaves the Frame, and nothing is logged.
-- **Automatic fallback.** If the server cannot be found or keeps failing, every later clip silently uses the one-shot CLI path; the keyboard never depends on the server.
-- Set `FRAMEKEYBOARD_WHISPER_SERVER` to another command, or to the empty value to disable the server and keep the per-clip CLI. `FRAMEKEYBOARD_WHISPER_SERVER_IDLE` sets how many seconds (0–3600, default 180) the server stays up after the keyboard hides.
+```sh
+FRAMEKEYBOARD_WHISPER_SERVER=~/.local/share/framekeyboard/current/bin/whisper-server \
+  ~/.local/bin/framekeyboard
+```
+
+If you opt in: the server starts when the keyboard first appears, is kept across clips, listens on a random loopback port on `127.0.0.1` (clips are POSTed in memory, never written to disk on this path, nothing leaves the Frame), stops shortly after the keyboard hides, and also stops by itself if the keyboard process dies. If it keeps failing, later clips silently fall back to the one-shot CLI. `FRAMEKEYBOARD_WHISPER_SERVER_IDLE` sets how many seconds (0–3600, default 180) it stays up after the keyboard hides.
 
 ## Overrides
 
@@ -55,7 +57,7 @@ All optional; the defaults are what the model download above gives you. They are
 | `FRAMEKEYBOARD_WHISPER_MODEL` | best `ggml-*.bin` in the models directory | Exact model file; a missing file disables the mic key. |
 | `FRAMEKEYBOARD_WHISPER_LANGUAGE` | `auto` | Language code such as `en` or `de` to skip detection. |
 | `FRAMEKEYBOARD_WHISPER_THREADS` | `4` | Inference threads, 1–32. |
-| `FRAMEKEYBOARD_WHISPER_SERVER` | bundled `whisper-server` | Warm-server command; the empty value disables the server (see [Warm server](#warm-server)). |
+| `FRAMEKEYBOARD_WHISPER_SERVER` | unset: one-shot CLI | Opt-in warm server; set it to the server command to enable, or to the empty value to force the CLI (see [Warm server (opt-in)](#warm-server-opt-in)). |
 | `FRAMEKEYBOARD_WHISPER_SERVER_IDLE` | `180` | Seconds (0–3600) the server stays up after the keyboard hides. |
 
 Detection order for the command: `FRAMEKEYBOARD_WHISPER_CLI`, then the `whisper-cli` installed beside the keyboard binary; there is no `PATH` search.
