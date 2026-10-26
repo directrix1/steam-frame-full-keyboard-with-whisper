@@ -47,6 +47,10 @@ struct TranscriptCheck {
 };
 TranscriptCheck clean_transcript(const std::string& raw, double seconds, double peak);
 
+// Split text into pieces of at most `limit` characters for one text commit
+// each (Gamescope's per-commit limit is 32); splits fall on word boundaries.
+std::vector<std::string> split_commits(const std::string& text, std::size_t limit = 32);
+
 // 16 kHz mono little-endian PCM as a RIFF WAVE file.
 std::vector<char> make_wav(const std::vector<std::int16_t>& samples);
 

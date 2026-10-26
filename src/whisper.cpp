@@ -319,7 +319,91 @@ double peak_amplitude(const std::vector<std::int16_t>& samples) {
     return static_cast<double>(peak) / 32768.0;
 }
 constexpr double audible_peak = 0.02; // 2 % of full scale: above room tone.
+
+// Whisper writes typographic punctuation (curly quotes, en/em dashes,
+// ellipsis) that no physical key can produce and that pushes a phrase off
+// the ordinary-keymap typing path. Fold those to the ASCII the keyboard
+// types; spoken words are never altered, only their punctuation marks.
+std::string fold_typography(const std::string& text) {
+    std::string out;
+    for (const char* it = text.c_str(); *it;) {
+        const auto c = static_cast<char32_t>(g_utf8_get_char(it));
+        it = g_utf8_next_char(it);
+        switch (c) {
+        case U'\u2018':
+        case U'\u2019':
+        case U'\u201A':
+            out += '\'';
+            break;
+        case U'\u201C':
+        case U'\u201D':
+            out += '"';
+            break;
+        case U'\u2013':
+        case U'\u2014':
+            out += '-';
+            break;
+        case U'\u2026':
+            out += "...";
+            break;
+        case U'\u00A0':
+            out += ' ';
+            break;
+        default:
+            append_char(out, c);
+        }
+    }
+    return out;
+}
 } // namespace
+
+// Gamescope's text commit carries at most 32 characters at once, so longer
+// results are delivered as chunks the output queue types in order. Each word
+// keeps its trailing space, so the chunks concatenate to exactly the input;
+// splits fall on word boundaries, and words longer than the limit split at
+// character boundaries.
+std::vector<std::string> split_commits(const std::string& text, std::size_t limit) {
+    std::vector<std::string> chunks;
+    std::string chunk;
+    std::size_t characters = 0;
+    const auto flush = [&] {
+        if (!chunk.empty()) {
+            chunks.push_back(chunk);
+            chunk.clear();
+            characters = 0;
+        }
+    };
+    for (const char* it = text.c_str(); *it;) {
+        const char* word_end = it;
+        std::size_t word_characters = 0;
+        while (*word_end && *word_end != ' ') {
+            word_end = g_utf8_next_char(word_end);
+            ++word_characters;
+        }
+        const bool trailing_space = *word_end == ' ';
+        std::string token(it, static_cast<std::size_t>(word_end - it));
+        if (trailing_space) {
+            token += ' ';
+        }
+        const std::size_t token_characters = word_characters + (trailing_space ? 1 : 0);
+        if (token_characters <= limit && characters + token_characters > limit) {
+            flush(); // Start a new commit; the token, spaces included, moves whole.
+        }
+        // Append, force-splitting an over-limit token at the limit.
+        for (const char* piece = token.c_str(); *piece;) {
+            const char* next = g_utf8_next_char(piece);
+            if (characters == limit) {
+                flush();
+            }
+            chunk.append(piece, static_cast<std::size_t>(next - piece));
+            ++characters;
+            piece = next;
+        }
+        it = trailing_space ? word_end + 1 : word_end;
+    }
+    flush();
+    return chunks;
+}
 
 TranscriptCheck clean_transcript(const std::string& raw, double seconds, double peak) {
     if (!g_utf8_validate(raw.c_str(), -1, nullptr)) {
@@ -333,6 +417,7 @@ TranscriptCheck clean_transcript(const std::string& raw, double seconds, double 
     }
     text = strip_annotations(text);
     text = fold_repeats(text);
+    text = fold_typography(text);
     const double characters = static_cast<double>(g_utf8_strlen(text.c_str(), -1));
     if (text.empty()) {
         return {"", "No speech was detected."};
@@ -945,7 +1030,19 @@ void WhisperInput::run() {
             jobs_.pop_front();
             busy_ = true;
         }
+        // Fixed-shape diagnostics for reports like "long sentences do not
+        // work": clip duration and peak, and the size or category of the
+        // outcome. Never the transcript itself.
+        const double clip_seconds = static_cast<double>(samples.size()) / capture_rate;
+        const double clip_peak = peak_amplitude(samples);
         Result result = transcribe(std::move(samples));
+        std::fprintf(
+            stdout, "Dictation clip: %.1f s, peak %.4f, %s\n", clip_seconds, clip_peak,
+            result.text.empty()
+                ? ("outcome: " + result.error).c_str()
+                : ("result " + std::to_string(g_utf8_strlen(result.text.c_str(), -1)) + " chars")
+                      .c_str());
+        std::fflush(stdout);
         const std::lock_guard guard(mutex_);
         busy_ = false;
         if (!discard_) {

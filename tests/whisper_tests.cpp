@@ -8,6 +8,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <glib.h>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -68,6 +69,35 @@ void test_wav() {
     std::cout << "ok wav\n";
 }
 
+void test_split_commits() {
+    {
+        require(split_commits("").empty(), "empty text yields no commits");
+        require(split_commits("hello") == std::vector<std::string>{"hello"}, "short text is one commit");
+    }
+    {
+        // A 92-character phrase, like a dictated sentence that used to fail.
+        std::string phrase;
+        for (int i = 0; i < 12; ++i) {
+            phrase += (i ? " " : "") + std::string("word") + std::to_string(i);
+        }
+        require(g_utf8_strlen(phrase.c_str(), -1) > 60, "test phrase is long");
+        const auto chunks = split_commits(phrase);
+        require(chunks.size() >= 3, "long phrase splits into several commits");
+        std::string joined;
+        for (const auto& chunk : chunks) {
+            require(g_utf8_strlen(chunk.c_str(), -1) <= 32, "chunk within the commit limit");
+            joined += chunk;
+        }
+        require(joined == phrase, "chunks concatenate to exactly the phrase, spaces included");
+    }
+    {
+        const auto chunks = split_commits(std::string(40, 'x'));
+        require(chunks.size() == 2 && chunks[0].size() == 32 && chunks[1].size() == 8,
+                "one long word force-splits at the limit");
+    }
+    std::cout << "ok split commits\n";
+}
+
 void test_cleanup() {
     {
         const auto check = clean_transcript("hello  [Music]   world\n", 4.0, 1.0);
@@ -117,6 +147,11 @@ void test_cleanup() {
         require(check.error.empty(), "fast speech over audible audio is kept");
         require(check.text == long_text.substr(0, long_text.size() - 1),
                 "audible text is typed unmodified");
+    }
+    {
+        const auto check = clean_transcript("don\u2019t \u2014 say \u201Chi\u201D\u2026 ok", 6.0, 0.5);
+        require(check.text == "don't - say \"hi\"... ok",
+                "typographic punctuation folds to typed ASCII");
     }
     std::cout << "ok cleanup\n";
 }
@@ -375,6 +410,7 @@ int main() {
     try {
         test_wav();
         test_cleanup();
+        test_split_commits();
         test_detection(temporary.path / "home");
         test_worker(temporary.path / "worker");
         test_server(temporary.path / "server");

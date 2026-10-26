@@ -249,17 +249,18 @@ std::vector<Control> App::controls() const {
     }
     // One row, always: Settings, Recenter, zoom, Pin, passthrough, language.
     const double x = body.x + 18;
-    auto button = [&](int column, double width = 60) { return Rect{x + column * 70.0, 12.0, width, 42}; };
+    auto button = [&](int column, double width = 60) {
+        return Rect{x + column * 70.0, 12.0, width, 42};
+    };
     add({ControlKind::Settings}, {"settings", "Settings", button(0), false, Icon::Settings});
     add({ControlKind::Recenter}, {"recenter", "Recenter", button(1), false, Icon::Recenter});
-    add({ControlKind::Smaller},
-        {"size-smaller", "Smaller keyboard", button(2), false, Icon::ScaleDown});
+    add({ControlKind::Smaller}, {"size-smaller", "Smaller keyboard", button(2), false, Icon::ScaleDown});
     add({ControlKind::Larger}, {"size-larger", "Larger keyboard", button(3), false, Icon::ScaleUp});
-    add({ControlKind::Pin}, {"pin", settings_.pinned ? "Unpin keyboard" : "Pin keyboard",
-                             button(4), false, settings_.pinned ? Icon::PinOn : Icon::PinOff});
+    add({ControlKind::Pin}, {"pin", settings_.pinned ? "Unpin keyboard" : "Pin keyboard", button(4),
+                             false, settings_.pinned ? Icon::PinOn : Icon::PinOff});
     add({ControlKind::Passthrough},
-        {"passthrough", passthrough_ ? "Close with the dashboard" : "Stay open over apps",
-         button(5), passthrough_, passthrough_ ? Icon::PassthroughOn : Icon::PassthroughOff});
+        {"passthrough", passthrough_ ? "Close with the dashboard" : "Stay open over apps", button(5),
+         passthrough_, passthrough_ ? Icon::PassthroughOn : Icon::PassthroughOff});
     if (!settings_.favorites.empty()) {
         add({ControlKind::LanguageCycle},
             {"language-cycle", language_short_name(profiles_.languages.at(settings_.active.language)),
@@ -1400,10 +1401,19 @@ void App::deliver_whisper() {
     } else if (options_.input == InputBackend::None) {
         // A preview or check launch cannot type; never show the transcription.
         status_ = "Preview launch: the transcription was discarded.";
-    } else if (output_.commit_text(result->text)) {
-        status_.clear();
     } else {
-        status_ = "Text was not sent. Release other keys and check the target/input connection.";
+        // A text commit carries at most 32 characters, so a longer phrase is
+        // queued as word-bounded chunks; the output queue delivers them in
+        // order. Anything beyond the first failing chunk is not queued.
+        bool accepted = true;
+        for (const auto& chunk : split_commits(result->text)) {
+            accepted = output_.commit_text(chunk) && accepted;
+        }
+        if (accepted) {
+            status_.clear();
+        } else {
+            status_ = "Text was not sent. Release other keys and check the target/input connection.";
+        }
     }
     dirty = true;
 }
