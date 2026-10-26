@@ -735,7 +735,11 @@ class VrPanel {
               "Set keyboard intersection mask");
         std::string error;
         if (!texture_.update(renderer, error)) {
-            throw std::runtime_error(error);
+            recover_texture(error);
+            if (!texture_.update(renderer, error)) {
+                throw std::runtime_error(error);
+            }
+            std::cout << "Panel texture recovered from GPU loss.\n" << std::flush;
         }
         const bool native = texture_.native_pixels();
         if (!reported_native_ || *reported_native_ != native) {
@@ -743,6 +747,31 @@ class VrPanel {
                                  : "Using RGBA compatibility overlay texture.\n")
                       << std::flush;
             reported_native_ = native;
+        }
+    }
+    // A co-process on the Adreno — the Whisper helper running on the GPU —
+    // can fault the driver and take this panel's private device down with it
+    // (vkWaitForFences -> VK_ERROR_DEVICE_LOST). The kernel resets the GPU
+    // context within milliseconds, so rebuild our device and textures instead
+    // of exiting: the VR connection, the overlay handle and the Cairo
+    // renderer survive, and submit's retry hands VR a fresh image. The
+    // overlay texture is cleared first so the compositor drops its reference
+    // to the images of the lost device. Only a device that cannot be
+    // recreated at all ends the app.
+    void recover_texture(std::string& error) {
+        std::cerr << "Overlay texture lost the GPU: " << error << "; recreating the device.\n"
+                  << std::flush;
+        vr::VROverlay()->ClearOverlayTexture(handle_);
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            texture_.destroy();
+            vulkan_.destroy();
+            std::string rebuilt;
+            if (vulkan_.init(rebuilt) && texture_.create(vulkan_, handle_, rebuilt)) {
+                error.clear();
+                return;
+            }
+            error = rebuilt;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
     vr::VROverlayHandle_t handle() const { return handle_; }
