@@ -1,5 +1,14 @@
 # Third-party sources
 
+## Speech transcription
+
+`whisper.cpp/` is whisper.cpp upstream master at commit
+`231638a0717b7822784297e5980965ffcec05810` (MIT), always built and shipped as
+the keyboard's own `whisper-cli`/`whisper-server`; no external whisper.cpp is
+used or detected. `spirv-headers/` (tag `vulkan-sdk-1.4.321.0`, Khronos MIT)
+feeds its Vulkan backend. Pruning and the single CMake patch are recorded in
+each directory's `VENDORED.md`.
+
 ## libei client
 
 `libei/` contains the client and shared utility sources from libei 1.6.0,

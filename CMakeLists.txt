@@ -5,8 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-# Keep build-machine directories out of __FILE__, assertions and debug paths.
-# RelWithDebInfo remains useful locally; packaging strips only its installed copy.
+#Keep build - machine directories out of __FILE__, assertions and debug paths.
+#RelWithDebInfo remains useful locally; packaging strips only its installed copy.
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options("-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
                         "-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=./build")
@@ -19,8 +19,8 @@ find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 pkg_check_modules(NATIVE REQUIRED IMPORTED_TARGET cairo pangocairo xkbcommon json-c)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
-# SteamOS libei 1.4.1 crashes on an aborted negotiation. Keep the fixed client
-# inside this app; never replace the runtime library used by Steam itself.
+#SteamOS libei 1.4.1 crashes on an aborted negotiation.Keep the fixed client
+#inside this app; never replace the runtime library used by Steam itself.
 add_subdirectory(third_party/libei)
 find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
 set(IME_XML "${CMAKE_CURRENT_SOURCE_DIR}/third_party/gamescope/gamescope-input-method.xml")
@@ -120,6 +120,45 @@ foreach(lexicon ${SWIPE_LEXICONS})
     configure_file("${lexicon}" "swipe/lexicons/${name}" COPYONLY)
 endforeach()
 
+# Speech transcription: the vendored whisper.cpp is always built and shipped.
+# The keyboard launches the whisper-cli / whisper-server produced beside its
+# own binary; no external whisper.cpp is used. The GPU (Vulkan) backend is
+# built when the toolchain provides glslc and Vulkan headers, and the CPU
+# backend is the only path otherwise.
+find_package(Vulkan QUIET COMPONENTS glslc)
+set(FRAMEKEYBOARD_WHISPER_VULKAN ${Vulkan_FOUND})
+if(FRAMEKEYBOARD_WHISPER_VULKAN)
+    # The vendored SPIRV-Headers is consumed through its installed package
+    # file; stage that install inside the build tree at configure time.
+    execute_process(COMMAND "${CMAKE_COMMAND}"
+            -S "${CMAKE_CURRENT_SOURCE_DIR}/third_party/spirv-headers"
+            -B "${CMAKE_CURRENT_BINARY_DIR}/spirv-headers-build"
+            -DCMAKE_BUILD_TYPE=Release -DSPIRV_HEADERS_ENABLE_TESTS=OFF
+            -DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/spirv-headers
+            COMMAND_ERROR_IS_FATAL ANY)
+    execute_process(COMMAND "${CMAKE_COMMAND}" --build
+            "${CMAKE_CURRENT_BINARY_DIR}/spirv-headers-build" --target install
+            COMMAND_ERROR_IS_FATAL ANY)
+    list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_BINARY_DIR}/spirv-headers")
+    # ggml-vulkan additionally includes the headers directly.
+    include_directories(SYSTEM "${CMAKE_CURRENT_BINARY_DIR}/spirv-headers/include")
+endif()
+set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_EXAMPLES ON CACHE BOOL "" FORCE)
+set(WHISPER_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(GGML_OPENMP ON CACHE BOOL "" FORCE)
+set(GGML_VULKAN ${FRAMEKEYBOARD_WHISPER_VULKAN} CACHE BOOL "" FORCE)
+# whisper.cpp defaults BUILD_SHARED_LIBS to ON, which would turn this project's
+# own libraries shared and leave whisper-cli needing shipped .so files.
+# Everything links statically: one self-contained binary per program.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+# A Debug build of this project must not make the transcriber crawl; whisper
+# and ggml are compiled with -O2 whatever the parent build type.
+set(CMAKE_C_FLAGS_DEBUG "-O2 -g")
+set(CMAKE_CXX_FLAGS_DEBUG "-O2 -g")
+add_subdirectory(third_party/whisper.cpp EXCLUDE_FROM_ALL)
+message(STATUS "whisper.cpp: vendored build, Vulkan backend=${FRAMEKEYBOARD_WHISPER_VULKAN}")
+
 # Link the matching architecture from the sysroot; embed only the device runtime path.
 if(CMAKE_CROSSCOMPILING)
     set(OPENVR_LIBRARY "${CMAKE_SYSROOT}/opt/steamvr/bin/linuxarm64/libopenvr_api.so" CACHE FILEPATH "OpenVR library")
@@ -149,6 +188,18 @@ foreach(manifest actions.json frame-controller.json)
     configure_file("vr/${manifest}" "vr/${manifest}" COPYONLY)
 endforeach()
 set_target_properties(framekeyboard PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "${OPENVR_RUNTIME_PATH}")
+
+# The development tree must place the whisper helpers beside the keyboard
+# binary, the same relationship the installed package has. Building the
+# keyboard always builds them.
+foreach(whisper_helper whisper-cli whisper-server)
+    if(TARGET ${whisper_helper})
+        set_target_properties(${whisper_helper} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+        add_dependencies(framekeyboard ${whisper_helper})
+        install(TARGETS ${whisper_helper} RUNTIME DESTINATION bin)
+    endif()
+endforeach()
 
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bridge")
 foreach(bridge_file native_bridge.py steam_bridge.js)
@@ -321,6 +372,10 @@ install(FILES third_party/overlay_texture/LICENSE DESTINATION third_party/overla
 install(FILES third_party/libei/COPYING third_party/libei/README.md third_party/libei/provenance.json DESTINATION third_party/libei)
 
 install(FILES third_party/gamescope/gamescope-input-method.xml DESTINATION third_party/gamescope)
+install(FILES third_party/whisper.cpp/LICENSE third_party/whisper.cpp/AUTHORS third_party/whisper.cpp/VENDORED.md
+        DESTINATION third_party/whisper.cpp)
+install(FILES third_party/spirv-headers/LICENSE third_party/spirv-headers/VENDORED.md
+        DESTINATION third_party/spirv-headers)
 if(FRAMEKEYBOARD_SWIPE_ENGINE)
     install(FILES third_party/futo-swipe/LICENSE.md third_party/futo-swipe/README.md
             DESTINATION third_party/futo-swipe)

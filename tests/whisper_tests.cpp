@@ -128,7 +128,6 @@ void test_detection(const fs::path& home) {
     };
     const auto saved_home = saved("HOME");
     const auto saved_data = saved("XDG_DATA_HOME");
-    const auto saved_path = saved("PATH");
     const auto saved_cli = saved("FRAMEKEYBOARD_WHISPER_CLI");
     const auto saved_model = saved("FRAMEKEYBOARD_WHISPER_MODEL");
 
@@ -137,38 +136,46 @@ void test_detection(const fs::path& home) {
     {
         std::ofstream(models / "ggml-tiny.bin"), std::ofstream(models / "ggml-base.bin");
     }
-    const auto path = home / "bin";
-    fs::create_directories(path);
-    write_script(path / "whisper-cli", "#!/bin/sh\nexit 0\n");
+    // The helpers the package installs beside the keyboard binary.
+    const auto app_dir = home / "release/bin";
+    fs::create_directories(app_dir);
+    write_script(app_dir / "whisper-cli", "#!/bin/sh\nexit 0\n");
+    write_script(app_dir / "whisper-server", "#!/bin/sh\nexit 0\n");
     setenv("HOME", home.c_str(), 1);
     setenv("XDG_DATA_HOME", (home / "data").c_str(), 1);
-    setenv("PATH", path.c_str(), 1);
     unsetenv("FRAMEKEYBOARD_WHISPER_CLI");
     unsetenv("FRAMEKEYBOARD_WHISPER_MODEL");
-    auto backend = detect_whisper_backend();
-    require(backend.has_value(), "PATH whisper-cli plus a model are detected");
-    require(backend->command.front() == (path / "whisper-cli").string(), "PATH command");
+    auto backend = detect_whisper_backend(app_dir);
+    require(backend.has_value(), "bundled helpers plus a model are detected");
+    require(backend->command.front() == (app_dir / "whisper-cli").string(), "bundled command");
+    require(backend->server_command.front() == (app_dir / "whisper-server").string(), "bundled server");
     require(backend->model.filename() == "ggml-base.bin", "small before base before tiny");
     require(backend->language == "auto" && backend->threads == 4, "defaults");
+
+    setenv("FRAMEKEYBOARD_WHISPER_SERVER", "", 1);
+    backend = detect_whisper_backend(app_dir);
+    require(backend.has_value() && backend->server_command.empty(),
+            "an explicitly empty server value keeps the CLI-only path");
+    unsetenv("FRAMEKEYBOARD_WHISPER_SERVER");
 
     setenv("FRAMEKEYBOARD_WHISPER_MODEL", (models / "ggml-tiny.bin").c_str(), 1);
     setenv("FRAMEKEYBOARD_WHISPER_LANGUAGE", "de", 1);
     setenv("FRAMEKEYBOARD_WHISPER_THREADS", "2", 1);
-    backend = detect_whisper_backend();
+    backend = detect_whisper_backend(app_dir);
     require(backend.has_value(), "explicit model");
     require(backend->model.filename() == "ggml-tiny.bin", "explicit model wins");
     require(backend->language == "de" && backend->threads == 2, "language and threads");
 
     setenv("FRAMEKEYBOARD_WHISPER_MODEL", (models / "missing.bin").c_str(), 1);
-    require(!detect_whisper_backend().has_value(), "a missing explicit model means unavailable");
+    require(!detect_whisper_backend(app_dir).has_value(), "a missing explicit model means unavailable");
 
-    setenv("PATH", (home / "empty-bin").c_str(), 1); // No whisper-cli anywhere.
     unsetenv("FRAMEKEYBOARD_WHISPER_MODEL");
-    require(!detect_whisper_backend().has_value(), "no command means unavailable");
+    // No helpers beside this directory and no override: nothing to run.
+    require(!detect_whisper_backend(home / "empty-release/bin").has_value(),
+            "no bundled command means unavailable");
 
     restore("HOME", saved_home);
     restore("XDG_DATA_HOME", saved_data);
-    restore("PATH", saved_path);
     restore("FRAMEKEYBOARD_WHISPER_CLI", saved_cli);
     restore("FRAMEKEYBOARD_WHISPER_MODEL", saved_model);
     std::cout << "ok detection\n";

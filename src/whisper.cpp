@@ -100,68 +100,50 @@ std::vector<std::string> tokenize_command(const char* value) {
     return argv;
 }
 
-// The Frame installs whisper-cpp through the rootless Guix profile, whose
-// binaries run inside the profile's container. Prefer a direct binary; fall
-// back to the container wrapper when only the store copy exists.
-std::vector<std::string> detect_command() {
+// The directory of the running executable; /proc/self/exe covers the
+// installed release and the development tree alike.
+fs::path executable_dir() {
+    std::array<char, 4096> buffer{};
+    const ssize_t len = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+    if (len <= 0) {
+        return {};
+    }
+    return fs::path(std::string(buffer.data(), static_cast<std::size_t>(len))).parent_path();
+}
+
+// The shipped whisper-cli sits beside the keyboard binary;
+// FRAMEKEYBOARD_WHISPER_CLI overrides it for development and tests.
+std::vector<std::string> detect_command(const fs::path& app_dir) {
     if (const char* cli = std::getenv("FRAMEKEYBOARD_WHISPER_CLI"); cli && *cli) {
         return tokenize_command(cli);
     }
-    if (auto cli = find_on_path("whisper-cli")) {
-        return {cli->string()};
-    }
-    if (const char* home = std::getenv("HOME")) {
-        fs::path profile = fs::path(home) / ".guix-profile/bin/whisper-cli";
-        if (executable(profile)) {
-            return {profile.string()};
-        }
-        fs::path wrapper = fs::path(home) / ".local/bin/guix-env";
-        std::error_code ec;
-        if (executable(wrapper)) {
-            // Any installed whisper-cpp store directory will do; the wrapper
-            // resolves the profile's own version inside the container.
-            fs::path store = fs::path(home) / ".local/share/guix/gnu/store";
-            std::vector<fs::path> candidates;
-            for (const auto& item : fs::directory_iterator(store, ec)) {
-                const auto name = item.path().filename().string();
-                if (name.find("whisper-cpp-") != std::string::npos &&
-                    executable(item.path() / "bin/whisper-cli")) {
-                    candidates.push_back(item.path());
-                }
-            }
-            std::sort(candidates.begin(), candidates.end());
-            if (!candidates.empty()) {
-                return {wrapper.string(), "whisper-cli"};
-            }
-        }
+    if (auto bundled = app_dir / "whisper-cli"; executable(bundled)) {
+        return {bundled.string()};
     }
     return {};
 }
 
 // whisper-server keeps one model loaded for many clips, so dictation stops
-// paying the model load per press. FRAMEKEYBOARD_WHISPER_SERVER names another
-// command; the empty value disables the server and keeps the per-clip CLI.
-std::vector<std::string> detect_server_command(const std::vector<std::string>& cli) {
-    if (const char* server = std::getenv("FRAMEKEYBOARD_WHISPER_SERVER"); server && *server) {
+// paying the model load per press. FRAMEKEYBOARD_WHISPER_SERVER overrides the
+// bundled binary; an explicitly set empty value disables the server and keeps
+// the per-clip CLI.
+std::vector<std::string> detect_server_command(const std::vector<std::string>& cli,
+                                               const fs::path& app_dir) {
+    if (const char* server = std::getenv("FRAMEKEYBOARD_WHISPER_SERVER")) {
+        if (!*server) {
+            return {};
+        }
         return tokenize_command(server);
     }
-    if (cli.size() == 2) {
-        // The Guix wrapper case: the same profile ships whisper-server, but
-        // only the store copy proves it here on the host.
-        if (const char* home = std::getenv("HOME")) {
-            fs::path store = fs::path(home) / ".local/share/guix/gnu/store";
-            std::error_code ec;
-            for (const auto& item : fs::directory_iterator(store, ec)) {
-                if (item.path().filename().string().find("whisper-cpp-") != std::string::npos &&
-                    executable(item.path() / "bin/whisper-server")) {
-                    return {cli.front(), "whisper-server"};
-                }
-            }
-        }
-        return {};
+    if (auto bundled = app_dir / "whisper-server"; executable(bundled)) {
+        return {bundled.string()};
     }
-    if (auto candidate = fs::path(cli.front()).parent_path() / "whisper-server"; executable(candidate)) {
-        return {candidate.string()};
+    if (cli.size() == 1) {
+        // An override may name a directory that also holds the server.
+        if (auto candidate = fs::path(cli.front()).parent_path() / "whisper-server";
+            executable(candidate)) {
+            return {candidate.string()};
+        }
     }
     return {};
 }
@@ -378,8 +360,9 @@ std::vector<char> make_wav(const std::vector<std::int16_t>& samples) {
     return out;
 }
 
-std::optional<WhisperBackend> detect_whisper_backend() {
-    auto command = detect_command();
+std::optional<WhisperBackend> detect_whisper_backend(const fs::path& app_dir) {
+    const fs::path directory = app_dir.empty() ? executable_dir() : app_dir;
+    auto command = detect_command(directory);
     if (command.empty() || !executable(command.front())) {
         return {};
     }
@@ -404,7 +387,7 @@ std::optional<WhisperBackend> detect_whisper_backend() {
             backend.threads = value;
         }
     }
-    backend.server_command = detect_server_command(backend.command);
+    backend.server_command = detect_server_command(backend.command, directory);
     if (const char* idle = std::getenv("FRAMEKEYBOARD_WHISPER_SERVER_IDLE"); idle && *idle) {
         const int value = std::atoi(idle);
         if (value >= 0 && value <= 3600) {
@@ -728,6 +711,9 @@ WhisperInput::Result WhisperInput::transcribe(std::vector<std::int16_t> samples)
         return {"", "Cannot start the Whisper process."};
     }
     if (cli_child == 0) {
+        // The whisper helper runs on the GPU when its build has a Vulkan
+        // backend; session overlay layers would only interfere.
+        setenv("VK_LOADER_LAYERS_DISABLE", "~implicit~", 0);
         const int devnull = open("/dev/null", O_WRONLY);
         if (devnull >= 0) {
             dup2(devnull, STDOUT_FILENO);
@@ -879,6 +865,10 @@ void WhisperInput::manage_server() {
         // An app that dies outside its own cleanup (SIGTERM, crash) must not
         // leave a resident server behind holding a loaded model.
         prctl(PR_SET_PDEATHSIG, SIGTERM);
+        // A gaming session injects implicit Vulkan layers (overlay stacks)
+        // that break the whisper Vulkan backend; a compute-only helper has
+        // no use for them. An explicitly set environment wins.
+        setenv("VK_LOADER_LAYERS_DISABLE", "~implicit~", 0);
         const int devnull = open("/dev/null", O_WRONLY);
         if (devnull >= 0) {
             dup2(devnull, STDOUT_FILENO);

@@ -15,8 +15,8 @@
 namespace framekeyboard {
 
 // A usable whisper.cpp command and model, plus an optional resident server.
-// The command may be a wrapper that takes whisper-cli's arguments; the Frame's
-// Guix profile runs it in a container.
+// The commands are the whisper-cli / whisper-server shipped with the keyboard;
+// environment overrides may name a wrapper that takes whisper-cli's arguments.
 struct WhisperBackend {
     std::vector<std::string> command; // Executable, then fixed leading arguments.
     // whisper-server with the same model: loaded once per keyboard appearance
@@ -30,9 +30,12 @@ struct WhisperBackend {
     int server_idle_seconds{180};
 };
 
-// Finds a transcriber and model. Empty when either is missing, so the mic key
-// stays hidden and no capture device is ever opened.
-std::optional<WhisperBackend> detect_whisper_backend();
+// Finds the bundled transcriber and model: the whisper helpers installed
+// beside the running keyboard binary (app_dir), with environment overrides
+// still honored. Empty when either is missing, so the mic key stays hidden
+// and no capture device is ever opened. The default app_dir is the directory
+// of the running executable.
+std::optional<WhisperBackend> detect_whisper_backend(const std::filesystem::path& app_dir = {});
 
 // Recognized text is untrusted input. Validation and cleanup: UTF-8, control
 // characters, non-speech annotations, whitespace, repeated-word loops and a
