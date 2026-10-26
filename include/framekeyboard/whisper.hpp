@@ -45,7 +45,7 @@ std::optional<WhisperBackend> detect_whisper_backend(const std::filesystem::path
 struct TranscriptCheck {
     std::string text, error;
 };
-TranscriptCheck clean_transcript(const std::string& raw, double seconds);
+TranscriptCheck clean_transcript(const std::string& raw, double seconds, double peak);
 
 // 16 kHz mono little-endian PCM as a RIFF WAVE file.
 std::vector<char> make_wav(const std::vector<std::int16_t>& samples);

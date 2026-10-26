@@ -70,45 +70,53 @@ void test_wav() {
 
 void test_cleanup() {
     {
-        const auto check = clean_transcript("hello  [Music]   world\n", 4.0);
+        const auto check = clean_transcript("hello  [Music]   world\n", 4.0, 1.0);
         require(check.error.empty(), "valid phrase has no error: " + check.error);
         require(check.text == "hello world", "annotation and whitespace cleanup");
     }
     {
-        const auto check = clean_transcript("[BLANK_AUDIO]", 4.0);
+        const auto check = clean_transcript("[BLANK_AUDIO]", 4.0, 1.0);
         require(check.error == "No speech was detected.", "silence annotation yields nothing");
     }
     {
-        const auto check = clean_transcript("laugh (music) loud", 4.0);
+        const auto check = clean_transcript("laugh (music) loud", 4.0, 1.0);
         require(check.text == "laugh loud", "round annotation removed");
     }
     {
-        const auto check = clean_transcript("keep (the music plays) inside", 4.0);
+        const auto check = clean_transcript("keep (the music plays) inside", 4.0, 1.0);
         require(check.text == "keep (the music plays) inside", "dictated parentheses survive");
     }
     {
-        const auto check = clean_transcript("the the the the the end", 4.0);
+        const auto check = clean_transcript("the the the the the end", 4.0, 1.0);
         require(check.text == "the end", "decoder loop collapses");
     }
     {
-        const auto check = clean_transcript("wait wait end", 4.0);
+        const auto check = clean_transcript("wait wait end", 4.0, 1.0);
         require(check.text == "wait wait end", "short dictated repeats stay");
     }
     {
-        const auto check = clean_transcript("a\tb\nc\r\nd", 4.0);
+        const auto check = clean_transcript("a\tb\nc\r\nd", 4.0, 1.0);
         require(check.text == "a b c d", "control characters become spaces");
     }
     {
-        const auto check = clean_transcript(std::string("\xff\xfe bad utf8", 12), 4.0);
+        const auto check = clean_transcript(std::string("\xff\xfe bad utf8", 12), 4.0, 1.0);
         require(check.error == "The transcription was not valid text.", "invalid UTF-8 rejected");
     }
+    // The speed rule applies only to near-silent clips: a hallucination of a
+    // quiet room is refused, but fast speech over real audio is typed as heard.
+    std::string long_text;
+    for (int i = 0; i < 40; ++i) {
+        long_text += "w" + std::to_string(i) + " ";
+    }
     {
-        std::string long_text;
-        for (int i = 0; i < 40; ++i) {
-            long_text += "w" + std::to_string(i) + " ";
-        }
-        const auto check = clean_transcript(long_text, 1.0);
-        require(check.error == "The result was rejected as unreliable.", "implausible length");
+        const auto check = clean_transcript(long_text, 1.0, 0.0);
+        require(check.error == "No speech was detected.", "silent clip rejects implausible text");
+    }
+    {
+        const auto check = clean_transcript(long_text, 1.0, 0.5);
+        require(check.error.empty(), "fast speech over audible audio is kept");
+        require(check.text == long_text.substr(0, long_text.size() - 1),
+                "audible text is typed unmodified");
     }
     std::cout << "ok cleanup\n";
 }

@@ -68,7 +68,7 @@ The mockup is incomplete; where it differs, the rules below apply.
   - Control characters are removed.
   - Non-speech annotations such as `[BLANK_AUDIO]` and `(music)` are removed.
   - Runs of four or more repeated words are collapsed.
-  - Text far longer than the phrase could hold is treated as a failed phrase (*proposal*: more than 25 characters per second of audio).
+  - On a near-silent clip, text longer than 25 characters per second of audio is a Whisper hallucination and yields "No speech was detected."; a clip that contains real sound is always typed as heard, even fast speech.
 - **Automatic stop:**
   - after 60 s of silence;
   - when the editor reaches 900 characters;

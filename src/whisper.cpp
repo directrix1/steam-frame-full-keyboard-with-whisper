@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fcntl.h>
 #include <glib.h>
 #include <json-c/json.h>
@@ -303,9 +304,24 @@ std::string fold_repeats(const std::string& text) {
     }
     return out;
 }
+
+// Full-scale fraction (0..1) of the loudest sample in a clip. Room tone sits
+// far below normal speech; this separates "the user made a sound" from
+// "the clip was silence", which decides whether Whisper's text can be
+// trusted at any speed.
+double peak_amplitude(const std::vector<std::int16_t>& samples) {
+    std::int32_t peak = 0;
+    for (const auto sample : samples) {
+        const std::int32_t value =
+            sample == INT16_MIN ? 32768 : std::abs(static_cast<std::int32_t>(sample));
+        peak = std::max(peak, value);
+    }
+    return static_cast<double>(peak) / 32768.0;
+}
+constexpr double audible_peak = 0.02; // 2 % of full scale: above room tone.
 } // namespace
 
-TranscriptCheck clean_transcript(const std::string& raw, double seconds) {
+TranscriptCheck clean_transcript(const std::string& raw, double seconds, double peak) {
     if (!g_utf8_validate(raw.c_str(), -1, nullptr)) {
         return {"", "The transcription was not valid text."};
     }
@@ -321,10 +337,12 @@ TranscriptCheck clean_transcript(const std::string& raw, double seconds) {
     if (text.empty()) {
         return {"", "No speech was detected."};
     }
-    // Whisper cannot speak faster than about 25 characters per second of
-    // audio; longer results are hallucinations of a quiet clip.
-    if (seconds >= min_capture_seconds && characters > 25.0 * seconds) {
-        return {"", "The result was rejected as unreliable."};
+    // The speed rule applies only to near-silent clips: text over 25
+    // characters per second of quiet audio is a Whisper hallucination of a
+    // room, not of a speaker. A clip that contains real sound is typed as
+    // heard — dictated speech must never be discarded for being too fast.
+    if (peak < audible_peak && seconds >= min_capture_seconds && characters > 25.0 * seconds) {
+        return {"", "No speech was detected."};
     }
     return {text, ""};
 }
@@ -591,6 +609,7 @@ void WhisperInput::submit(std::vector<std::int16_t> samples) {
 
 WhisperInput::Result WhisperInput::transcribe(std::vector<std::int16_t> samples) {
     const double seconds = static_cast<double>(samples.size()) / capture_rate;
+    const double peak = peak_amplitude(samples);
     if (seconds < min_capture_seconds) {
         return {"", "The recording was too short."};
     }
@@ -642,7 +661,7 @@ WhisperInput::Result WhisperInput::transcribe(std::vector<std::int16_t> samples)
         }
     }
     if (server_text) {
-        const auto check = clean_transcript(*server_text, seconds);
+        const auto check = clean_transcript(*server_text, seconds, peak);
         return Result{check.text, check.error};
     }
     fs::path directory = cache_home().empty() ? fs::path("/tmp") : cache_home() / "framekeyboard";
@@ -702,8 +721,20 @@ WhisperInput::Result WhisperInput::transcribe(std::vector<std::int16_t> samples)
         raw.push_back(buffer.data());
     }
     raw.push_back(nullptr);
+    // Diagnostics for GPU-side failures: the engine's own stderr is captured
+    // so a whisper helper's last words outlive the process. Transcript text
+    // travels on stdout (still discarded) and stderr lines are filtered to
+    // engine prefixes below; the file is private and never logged elsewhere.
+    int err_pipe[2] = {-1, -1};
+    if (pipe2(err_pipe, O_CLOEXEC | O_NONBLOCK) != 0) {
+        err_pipe[0] = err_pipe[1] = -1;
+    }
     const pid_t cli_child = fork();
     if (cli_child < 0) {
+        if (err_pipe[0] >= 0) {
+            close(err_pipe[0]);
+            close(err_pipe[1]);
+        }
         std::filesystem::remove(wav, ec);
         return {"", "Cannot start the Whisper process."};
     }
@@ -714,19 +745,119 @@ WhisperInput::Result WhisperInput::transcribe(std::vector<std::int16_t> samples)
         const int devnull = open("/dev/null", O_WRONLY);
         if (devnull >= 0) {
             dup2(devnull, STDOUT_FILENO);
-            dup2(devnull, STDERR_FILENO);
+            if (err_pipe[1] < 0) {
+                dup2(devnull, STDERR_FILENO);
+            }
             if (devnull > STDERR_FILENO) {
                 close(devnull);
             }
         }
+        if (err_pipe[1] >= 0) {
+            dup2(err_pipe[1], STDERR_FILENO);
+            close(err_pipe[0]);
+            close(err_pipe[1]);
+        }
         execv(raw[0], raw.data());
         _exit(127);
     }
+    if (err_pipe[1] >= 0) {
+        close(err_pipe[1]);
+    }
+    std::string engine_log;
+    std::string engine_carry; // trailing partial line between drains
+    bool engine_header_written = false;
+    const auto engine_flush = [&] {
+        if (err_pipe[0] < 0) {
+            return;
+        }
+        // Keep only whole lines; a partial tail waits for the next drain.
+        engine_log.insert(0, engine_carry);
+        const auto last_newline = engine_log.find_last_of('\n');
+        if (last_newline == std::string::npos) {
+            engine_carry = engine_log;
+            engine_log.clear();
+            return;
+        }
+        engine_carry = engine_log.substr(last_newline + 1);
+        engine_log.erase(last_newline + 1);
+        // Engine diagnostics only: keep lines the whisper/ggml engine or the
+        // Vulkan loader emits. Never a transcript (stdout) and never user
+        // text: whisper-cli stderr carries no typed content.
+        static constexpr std::array<const char*, 12> kEngineMarkers = {
+            "ggml", "whisper", "main:",  "system_info", "load_",   "encode:",
+            "vk",   "VULKAN",  "vulkan", "error",       "warning", "register_",
+        };
+        std::string kept;
+        std::istringstream lines(engine_log);
+        for (std::string line; std::getline(lines, line);) {
+            const std::string lowered = [&line] {
+                std::string value = line;
+                std::transform(value.begin(), value.end(), value.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return value;
+            }();
+            for (const char* marker : kEngineMarkers) {
+                if (lowered.find(marker) != std::string::npos) {
+                    kept += line;
+                    kept += '\n';
+                    break;
+                }
+            }
+        }
+        engine_log.clear();
+        if (kept.empty() && engine_header_written) {
+            return;
+        }
+        const fs::path directory =
+            cache_home().empty() ? fs::path("/tmp/framekeyboard") : cache_home() / "framekeyboard";
+        std::error_code ec;
+        std::filesystem::create_directories(directory, ec);
+        if (ec) {
+            return;
+        }
+        const fs::path log = directory / "whisper-helper.log";
+        if (const auto size = std::filesystem::file_size(log, ec); !ec && size > 1024 * 1024) {
+            std::filesystem::resize_file(log, 0, ec); // keep the file bounded
+        }
+        const int fd = open(log.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+        if (fd < 0) {
+            return;
+        }
+        std::FILE* file = fdopen(fd, "ae");
+        if (!file) {
+            ::close(fd);
+            return;
+        }
+        if (!engine_header_written) {
+            std::fprintf(file, "[%lld] run started\n", static_cast<long long>(std::time(nullptr)));
+            engine_header_written = true;
+        }
+        std::fputs(kept.c_str(), file);
+        std::fflush(file);
+        std::fclose(file);
+    };
+    const auto drain = [&] {
+        if (err_pipe[0] < 0) {
+            return;
+        }
+        char chunk[8192];
+        while (true) {
+            const ssize_t got = read(err_pipe[0], chunk, sizeof(chunk));
+            if (got <= 0) {
+                return;
+            }
+            if (engine_log.size() < 256 * 1024) {
+                engine_log.append(chunk, static_cast<std::size_t>(got));
+            }
+        }
+    };
     child_ = cli_child;
     int status = -1;
     const double deadline = static_cast<double>(g_get_monotonic_time()) / 1e6 + cli_timeout_seconds;
     bool abandoned = false;
     while (true) {
+        drain();
+        engine_flush();
         const int outcome = waitpid(cli_child, &status, WNOHANG);
         if (outcome == cli_child) {
             break;
@@ -747,6 +878,12 @@ WhisperInput::Result WhisperInput::transcribe(std::vector<std::int16_t> samples)
             break;
         }
         g_usleep(50 * 1000);
+    }
+    // The child is gone: whatever remains in the pipe is its final output.
+    drain();
+    engine_flush();
+    if (err_pipe[0] >= 0) {
+        close(err_pipe[0]);
     }
     child_ = -1;
     struct Cleanup {
@@ -783,7 +920,7 @@ WhisperInput::Result WhisperInput::transcribe(std::vector<std::int16_t> samples)
     if (raw_text.size() > max_transcript_bytes) {
         return {"", "The result was rejected as unreliable."};
     }
-    const auto check = clean_transcript(raw_text, seconds);
+    const auto check = clean_transcript(raw_text, seconds, peak);
     return Result{check.text, check.error};
 }
 
